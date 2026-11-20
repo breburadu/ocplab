@@ -1,0 +1,41 @@
+---
+- name: Install compact OpenShift lab on the Debian KVM bastion
+  hosts: bastion
+  become: true
+  gather_facts: false
+  vars:
+    config_file: "{{ playbook_dir }}/../config/lab.json"
+    phase: preflight
+  tasks:
+    - name: Validate selected phase
+      ansible.builtin.assert:
+        that:
+          - phase in ['preflight','prepare','mirror','assets','ignition','vms','complete','virtualization','storage','validate','diagnostics']
+    - name: Require explicit host-service management consent before preparation
+      ansible.builtin.assert:
+        that: (lookup('file', config_file) | from_json).manage_host_services | bool
+        fail_msg: "Read README, then set manage_host_services=true in your configuration."
+      when: phase == 'prepare'
+    - name: Install Debian dependencies during connected preparation
+      ansible.builtin.apt:
+        name: [qemu-system-x86, qemu-utils, libvirt-daemon-system, libvirt-clients, virtinst, nginx, haproxy, podman, dnsmasq-base, chrony, openssl, ca-certificates, curl, python3-yaml, python3, openssh-client, sysstat, smartmontools, libguestfs-tools, screen]
+        state: present
+        update_cache: true
+      when: phase == 'prepare'
+    - name: "Run {{ phase }} — live details in Screen logs window"
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -u
+          - "{{ playbook_dir }}/../scripts/lab.py"
+          - --config
+          - "{{ config_file }}"
+          - "{{ phase }}"
+      async: 43200
+      poll: 15
+      register: stage
+      changed_when: phase not in ['preflight', 'validate', 'diagnostics']
+      no_log: false
+    - name: Report stage result
+      ansible.builtin.debug:
+        var: stage.stdout_lines

@@ -1,0 +1,110 @@
+{
+  "work_dir": "/root/ocp-automated",
+  "cluster_name": "ocplab",
+  "base_domain": "lab.local",
+  "release": "4.22.18",
+  "release_digest": "sha256:909845d984190b49c97182be33f3919446fa2bdb44fd362046e45a98c55f3c53",
+  "tools_url": "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp",
+  "pull_secret_file": "/root/ocp/secrets/pull-secret.json",
+  "ssh_private_key": "/root/ocp/ssh/id_ed25519",
+  "network": {
+    "name": "ocplab-auto",
+    "uuid": "5e534296-88a1-4a34-aaf1-fb1d1eeab8b8",
+    "bridge": "virbr-ocp",
+    "cidr": "192.168.123.0/24",
+    "gateway": "192.168.123.1",
+    "dhcp_start": "192.168.123.100",
+    "dhcp_end": "192.168.123.200",
+    "isolate_guests": true
+  },
+  "bootstrap": {
+    "name": "ocplab-bootstrap",
+    "ip": "192.168.123.10",
+    "mac": "52:54:00:aa:00:10",
+    "memory_mib": 16384,
+    "vcpus": 4,
+    "disk_gib": 100
+  },
+  "nodes": [
+    {
+      "name": "ocplab-node-1",
+      "ip": "192.168.123.11",
+      "mac": "52:54:00:aa:00:11",
+      "memory_mib": 16384,
+      "vcpus": 4,
+      "disk_gib": 120
+    },
+    {
+      "name": "ocplab-node-2",
+      "ip": "192.168.123.12",
+      "mac": "52:54:00:aa:00:12",
+      "memory_mib": 16384,
+      "vcpus": 4,
+      "disk_gib": 120
+    },
+    {
+      "name": "ocplab-node-3",
+      "ip": "192.168.123.13",
+      "mac": "52:54:00:aa:00:13",
+      "memory_mib": 16384,
+      "vcpus": 4,
+      "disk_gib": 120
+    }
+  ],
+  "registry": {
+    "hostname": "registry.ocplab.lab.local",
+    "port": 5000,
+    "image": "docker.io/library/registry:2",
+    "container": "ocplab-mirror",
+    "unit": "ocplab-mirror.service"
+  },
+  "http_port": 8080,
+  "cluster_cidr": "10.128.0.0/14",
+  "host_prefix": 23,
+  "service_cidr": "172.30.0.0/16",
+  "disk_format": "raw",
+  "disk_dir": "/var/lib/libvirt/images/ocplab-auto",
+  "machine": "q35",
+  "virtualization": {
+    "enabled": true,
+    "version": "4.22.12",
+    "channel": "stable",
+    "catalog": "registry.redhat.io/redhat/redhat-operator-index:v4.22",
+    "package": "kubevirt-hyperconverged",
+    "namespace": "openshift-cnv",
+    "hco_name": "kubevirt-hyperconverged",
+    "fix_catalog_permissions": true
+  },
+  "mirror_parallel_images": 2,
+  "mirror_parallel_layers": 3,
+  "mirror_retries": 10,
+  "image_timeout": "30m",
+  "timeouts": {
+    "mirror_seconds": 21600,
+    "vm_install_seconds": 1800,
+    "bootstrap_seconds": 7200,
+    "cluster_seconds": 7200,
+    "operator_seconds": 3600
+  },
+  "allow_memory_overcommit": true,
+  "manage_host_services": false,
+  "host_faults_remediated": true,
+  "ntp_upstreams": [
+    "pool.ntp.org"
+  ],
+  "image_registry_emptydir": true,
+  "storage": {
+    "enabled": true,
+    "disk_gib": 80,
+    "target": "vdb",
+    "mount_path": "/var/hpvolumes",
+    "pool_name": "vm-storage",
+    "storage_class": "hostpath-csi",
+    "reclaim_policy": "Retain",
+    "default": true,
+    "adopt_existing_disks": false,
+    "minimum_host_free_gib": 100,
+    "timeout_seconds": 900,
+    "smoke_test": true
+  }
+}

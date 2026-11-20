@@ -1,0 +1,33 @@
+OpenShift lab automation v2.0 — offline validation
+Date: 2026-10-25
+
+Python compile: PASS
+Bash syntax (run.sh, start-screen.sh, session_run.sh): PASS
+Ansible playbook syntax: PASS (ansible-core in isolated test venv)
+Screen launcher: mocked command test; actual Screen/libvirt deployment not run here.
+Fresh end-to-end OpenShift deployment: NOT RUN.
+
+test_atomic_write_and_hash (test_lab.Tests.test_atomic_write_and_hash) ... ok
+test_config_never_includes_pull_secret (test_lab.Tests.test_config_never_includes_pull_secret) ... ok
+test_defaults (test_lab.Tests.test_defaults) ... ok
+test_duplicate_ip_rejected (test_lab.Tests.test_duplicate_ip_rejected) ... ok
+test_haproxy_no_frontend_server_and_cleanup (test_lab.Tests.test_haproxy_no_frontend_server_and_cleanup) ... ok
+test_isolation_has_no_nat (test_lab.Tests.test_isolation_has_no_nat) ... ok
+test_overlap_rejected (test_lab.Tests.test_overlap_rejected) ... ok
+test_vm_install_to_disk_transition (test_lab.Tests.test_vm_install_to_disk_transition) ... ok
+test_attachment_parser (test_v2.V2.test_attachment_parser) ... ok
+test_catalog_patch_uses_nonroot_and_distinct_tag (test_v2.V2.test_catalog_patch_uses_nonroot_and_distinct_tag) ... ok
+test_guest_script_syntax (test_v2.V2.test_guest_script_syntax) ... ok
+test_logrun_streams_and_redacts_password (test_v2.V2.test_logrun_streams_and_redacts_password) ... ok
+test_os_disk_rejected (test_v2.V2.test_os_disk_rejected) ... ok
+test_resume_vm_preserves_uuid (test_v2.V2.test_resume_vm_preserves_uuid) ... ok
+test_screen_launcher_two_windows (test_v2.V2.test_screen_launcher_two_windows) ... ok
+test_tar_symlink_and_hardlink_are_readable (test_v2.V2.test_tar_symlink_and_hardlink_are_readable) ... ok
+test_upgrade_preserves_identity_and_adopts (test_v2.V2.test_upgrade_preserves_identity_and_adopts) ... ok
+test_upgrade_refuses_wrong_fingerprint (test_v2.V2.test_upgrade_refuses_wrong_fingerprint) ... ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 0.234s
+
+OK
+Disk boot and SSH verified: ocplab-bootstrap

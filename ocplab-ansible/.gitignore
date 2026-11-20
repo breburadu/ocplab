@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+config/*.json
+!config/*.example.json
+*.log
+*.raw
+*.qcow2
+*.iso
+*.ign
+kubeconfig
+kubeadmin-password
+pull-secret*
+id_ed25519*
+*.key
+.env
