@@ -1,0 +1,27 @@
+# Adjust PHP-FPM socket and TLS certificate locations for the target host.
+server {
+    listen 80;
+    server_name dialcube.ro www.dialcube.ro;
+    return 301 https://dialcube.ro$request_uri;
+}
+server {
+    listen 443 ssl http2;
+    server_name dialcube.ro www.dialcube.ro;
+    root /var/www/dialcube.ro/httpdocs;
+    index index.php;
+
+    ssl_certificate /etc/letsencrypt/live/dialcube.ro/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/dialcube.ro/privkey.pem;
+
+    location / { try_files $uri $uri/ /index.php?$query_string; }
+    location = /index.php {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root/index.php;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+    }
+    location ~ \.php$ { return 404; }
+    location ~ /\.(?!well-known/) { deny all; }
+    location ~* \.(sql|log|bak|ini)$ { deny all; }
+    location ~* /composer\.(json|lock)$ { deny all; }
+    location ~* ^/uploads/.*\.(php|phtml|phar|cgi|pl|py|sh)$ { deny all; }
+}
