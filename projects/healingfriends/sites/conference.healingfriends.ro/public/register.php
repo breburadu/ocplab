@@ -1,220 +1,133 @@
 <?php
+declare(strict_types=1);
+session_start();
+header('Content-Type: text/html; charset=UTF-8');
+header('Cache-Control: no-store');
+header('X-Content-Type-Options: nosniff');
 
-use PHPMailer\PHPMailer\PHPMailer;
-use PHPMailer\PHPMailer\SMTP;
-use PHPMailer\PHPMailer\Exception;
-
-require 'vendor/autoload.php';
-require 'vendor/phpmailer/phpmailer/src/Exception.php';
-require 'vendor/phpmailer/phpmailer/src/PHPMailer.php';
-require 'vendor/phpmailer/phpmailer/src/SMTP.php';
-require 'vendor/phpmailer/phpmailer/src/OAuth.php';
-
-// Set the maximum allowed form submissions per IP
-$maxAttempts = 3;
-$ip = $_SERVER['REMOTE_ADDR']; // Get the IP address of the user
-$ipLogFile = 'ip_log.txt'; // File to track IPs, emails, and their submission count
-
-// Read the file if it exists
-$ipLogs = file_exists($ipLogFile) ? file($ipLogFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : [];
-$ipAttempts = [];
-
-// Parse the IP logs
-foreach ($ipLogs as $log) {
-    list($loggedIp, $loggedEmail, $count) = explode(',', $log);
-    $ipAttempts[$loggedIp] = ['email' => $loggedEmail, 'count' => $count];
-}
-
-// Check if the IP has exceeded the maximum number of attempts
-if (isset($ipAttempts[$ip]) && $ipAttempts[$ip]['count'] >= $maxAttempts) {
-    // Show error and stop execution
-    echo "<script>alert('Ați depășit numărul maxim de încercări. Vă rugăm să încercați din nou mai târziu.'); window.location.href = 'index.php';</script>";
+function redirectMessage(string $message): never {
+    $_SESSION['flash_message'] = $message;
+    header('Location: index.php', true, 303);
     exit;
 }
-
-// Read the event date from event_date.txt
-$eventDateFile = 'event_date.txt';
-if (file_exists($eventDateFile)) {
-    $eventDateStr = file_get_contents($eventDateFile);
-    $eventDate = DateTime::createFromFormat('dmY', trim($eventDateStr));
-    $currentDate = new DateTime();
-
-    // Check if the event date has passed
-    if ($currentDate > $eventDate) {
-        echo "<script>alert('Înscrierile la acest eveniment s-au încheiat.Va multumim pentru interes si va asteptam la alte evenimente!'); window.location.href = 'index.php';</script>";
-        exit;
-    }
-} else {
-    // If the event date file does not exist, show an error
-    echo "<script>alert('Data evenimentului nu a fost găsită. Încercați mai târziu.'); window.location.href = 'index.php';</script>";
-    exit;
+if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+    header('Allow: POST');
+    http_response_code(405);
+    exit('Method not allowed');
 }
-
-// Continue with form processing if the IP hasn't exceeded the limit
-if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    $name = htmlspecialchars($_POST['name']);
-    $email = htmlspecialchars($_POST['email']);
-    $telephone = htmlspecialchars($_POST['telephone']);
-
-    // Check for duplicates across any of the three fields
-    $file = 'registrants.txt';
-    $isDuplicate = false;
-
-    if (file_exists($file)) {
-        $registrants = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        foreach ($registrants as $registrant) {
-            list($regName, $regEmail, $regPhone) = explode(", ", $registrant);
-            $regName = str_replace('Nume: ', '', $regName);
-            $regEmail = str_replace('Email: ', '', $regEmail);
-            $regPhone = str_replace('Telefon: ', '', $regPhone);
-
-            if ($regName === $name || $regEmail === $email || $regPhone === $telephone) {
-                $isDuplicate = true;
-                break;
-            }
-        }
-    }
-
-    if (!$isDuplicate) {
-        // Save registrant to file
-        $content = "Nume: $name, Email: $email, Telefon: $telephone\n";
-        file_put_contents('registrants.txt', $content, FILE_APPEND);
-
-        // Load email content from email.txt and personalize it
-        $emailTextContent = file_get_contents('email.txt');
-        $emailTextContent = str_replace('{{name}}', $name, $emailTextContent); // Replace placeholder with the user's name
-
-        // Format the email content as HTML
-        $emailContent = "
-        <html>
-        <head>
-            <style>
-                body {
-                    font-family: Arial, sans-serif;
-                    background-color: #f4f4f4;
-                    margin: 0;
-                    padding: 0;
-                }
-                .container {
-                    width: 100%;
-                    padding: 20px;
-                    background-color: #ffffff;
-                    border-radius: 5px;
-                    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-                }
-                .header {
-                    background-color: #4CAF50;
-                    padding: 10px;
-                    color: white;
-                    text-align: center;
-                    border-radius: 5px 5px 0 0;
-                }
-                .content {
-                    padding: 20px;
-                    font-size: 16px;
-                    line-height: 1.6;
-                    color: #333;
-                }
-                .footer {
-                    text-align: center;
-                    padding: 10px;
-                    font-size: 12px;
-                    color: #666;
-                }
-            </style>
-        </head>
-        <body>
-            <div class='container'>
-                <div class='header'>
-                    <h1>Confirmare Inregistrare</h1>
-                </div>
-                <div class='content'>
-                    $emailTextContent
-                </div>
-                <div class='footer'>
-                    <p>Va multumim pentru Inregistrare !</p>
-                </div>
-            </div>
-        </body>
-        </html>";
-
-        // Initialize PHPMailer and configure SMTP
-        $mail = new PHPMailer(true);
-
-        try {
-            // Server settings
-            $mail->isSMTP();
-            $mail->SMTPDebug = 0;
-
-            // Disable SSL check
-            $mail->SMTPOptions = array(
-                'ssl' => array(
-                    'verify_peer' => false,
-                    'verify_peer_name' => false,
-                    'allow_self_signed' => true
-                )
-            );
-            
-            // SMTP configuration
-            $mail->Host = getenv('HF_SMTP_HOST') ?: 'healingfriends.ro';
-            $mail->SMTPAuth = true;
-            $mail->Username = getenv('HF_SMTP_USERNAME') ?: 'office@healingfriends.ro'; 
-            $mail->Password = getenv('HF_SMTP_PASSWORD') ?: ''; 
-            $mail->SMTPSecure = "tls";
-            $mail->Port = 587;
-
-            // Emulate a common email client
-            $mail->XMailer = 'Microsoft Outlook 16.0'; 
-            $mail->addCustomHeader('X-MS-TNEF-Correlator', ''); 
-            $mail->addCustomHeader('X-Priority', '3 (Normal)');
-            $mail->addCustomHeader('X-MSMail-Priority', 'Normal');
-            $mail->addCustomHeader('Importance', 'Normal');
-
-            // Recipients
-            $mail->setFrom('office@healingfriends.ro', 'Healing Friends');
-            $mail->addAddress($email, $name); 
-            $mail->addCC('office@healingfriends.ro'); 
-
-            // Modify subject to include the user's name
-            $mail->Subject = 'Salutare ' . $name . '! Multumim pentru interesul acordat!';
-
-            // Content
-            $mail->isHTML(true);
-            $mail->Body = $emailContent;
-            $mail->AltBody = strip_tags($emailContent); 
-
-            $mail->send();
-            
-            // Success popup and redirect to index.php
-            echo "<script>alert('Pre Inregistrarea a fost efectuata cu succes! Va rugam urmariti adresa de email folosita in procesul de inregistrare pentru informatii aditionale! Va multumim!'); window.location.href = 'index.php';</script>";
-            
-            // Increment IP count or add a new entry
-            if (!isset($ipAttempts[$ip])) {
-                $ipAttempts[$ip] = ['email' => $email, 'count' => 2];
-            } else {
-                $ipAttempts[$ip]['count']++;
-            }
-
-            // Write updated IP attempts to the file
-            $ipLogEntries = [];
-            foreach ($ipAttempts as $loggedIp => $data) {
-                $ipLogEntries[] = "$loggedIp,{$data['email']},{$data['count']}";
-            }
-            file_put_contents($ipLogFile, implode("\n", $ipLogEntries));
-
-            exit;
-        } catch (Exception $e) {
-            echo "Eroare la trimiterea emailului: {$mail->ErrorInfo}";
-        }
-    } else {
-        // Handle duplicates - generate a popup error and redirect
-        echo "<script>alert('Sunteti deja inregistrat! Va rugam urmariti adresa de mail folosita in procesul de inregistrare! Va multumim!'); window.location.href = 'index.php';</script>";
-        exit;
-    }
-} else {
-    // Redirect to index.php if the form is not submitted
-    header("Location: index.php");
-    exit;
+if (empty($_SESSION['csrf_token']) || !hash_equals($_SESSION['csrf_token'], (string)($_POST['csrf_token'] ?? ''))) {
+    http_response_code(403);
+    exit('Invalid form token');
 }
-
-?>
+unset($_SESSION['csrf_token']);
+$name = trim((string)($_POST['name'] ?? ''));
+$email = trim((string)($_POST['email'] ?? ''));
+$telephone = trim((string)($_POST['telephone'] ?? ''));
+if (mb_strlen($name) < 2 || mb_strlen($name) > 120 ||
+    !filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($email) > 254 ||
+    !preg_match('/^[+0-9() .-]{6,30}$/', $telephone)) {
+    redirectMessage('Date de contact invalide. Verificați câmpurile și reîncercați.');
+}
+$eventDate = DateTimeImmutable::createFromFormat('!dmY', trim((string)@file_get_contents(__DIR__ . '/event_date.txt')), new DateTimeZone('Europe/Bucharest'));
+if (!$eventDate) {
+    http_response_code(503);
+    exit('Event date is not configured');
+}
+if (new DateTimeImmutable('today', new DateTimeZone('Europe/Bucharest')) > $eventDate) {
+    redirectMessage('Înscrierile la acest eveniment s-au încheiat.');
+}
+$storage = getenv('HF_STORAGE_DIR') ?: dirname(__DIR__) . '/storage';
+if (!is_dir($storage) || !is_writable($storage)) {
+    error_log('Healing Friends: private storage missing or not writable');
+    http_response_code(503);
+    exit('Registration is temporarily unavailable');
+}
+$smtpPassword = getenv('HF_SMTP_PASSWORD');
+$smtpUser = getenv('HF_SMTP_USERNAME') ?: '';
+$smtpHost = getenv('HF_SMTP_HOST') ?: '';
+if (!$smtpPassword || !$smtpUser || !$smtpHost) {
+    error_log('Healing Friends: SMTP environment incomplete');
+    http_response_code(503);
+    exit('Registration is temporarily unavailable');
+}
+$clientIp = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+$rateFile = $storage . '/rate-limit.json';
+$rateFp = fopen($rateFile, 'c+');
+if (!$rateFp || !flock($rateFp, LOCK_EX)) {
+    http_response_code(503);
+    exit('Registration is temporarily unavailable');
+}
+$raw = stream_get_contents($rateFp);
+$limits = json_decode($raw ?: '{}', true);
+if (!is_array($limits)) $limits = [];
+$now = time();
+$limits = array_filter($limits, static fn($v) => is_array($v) && (int)($v['since'] ?? 0) > $now - 3600);
+$key = hash('sha256', $clientIp);
+$entry = $limits[$key] ?? ['since' => $now, 'count' => 0];
+if ((int)$entry['count'] >= 3) {
+    flock($rateFp, LOCK_UN);
+    fclose($rateFp);
+    http_response_code(429);
+    exit('Prea multe încercări. Reîncercați mai târziu.');
+}
+$entry['count']++;
+$limits[$key] = $entry;
+rewind($rateFp);
+ftruncate($rateFp, 0);
+fwrite($rateFp, json_encode($limits, JSON_THROW_ON_ERROR));
+fflush($rateFp);
+flock($rateFp, LOCK_UN);
+fclose($rateFp);
+$registrantsFile = $storage . '/registrants.jsonl';
+$registrants = @fopen($registrantsFile, 'c+');
+if (!$registrants || !flock($registrants, LOCK_EX)) {
+    http_response_code(503);
+    exit('Registration is temporarily unavailable');
+}
+rewind($registrants);
+while (($line = fgets($registrants)) !== false) {
+    $previous = json_decode($line, true);
+    if (is_array($previous) && strcasecmp((string)($previous['email'] ?? ''), $email) === 0) {
+        flock($registrants, LOCK_UN);
+        fclose($registrants);
+        redirectMessage('Această adresă de email este deja înregistrată.');
+    }
+}
+require_once __DIR__ . '/vendor/autoload.php';
+$template = (string)@file_get_contents(__DIR__ . '/email.txt');
+if (!$template || str_contains($template, '{{PAYMENT_IBAN}}')) {
+    flock($registrants, LOCK_UN);
+    fclose($registrants);
+    error_log('Healing Friends: email template or payment details not configured');
+    http_response_code(503);
+    exit('Registration is temporarily unavailable');
+}
+$body = str_replace('{{name}}', $name, $template);
+try {
+    $mail = new PHPMailer\PHPMailer\PHPMailer(true);
+    $mail->isSMTP();
+    $mail->Host = $smtpHost;
+    $mail->SMTPAuth = true;
+    $mail->Username = $smtpUser;
+    $mail->Password = $smtpPassword;
+    $mail->SMTPSecure = PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+    $mail->Port = (int)(getenv('HF_SMTP_PORT') ?: 587);
+    $mail->CharSet = 'UTF-8';
+    $mail->setFrom(getenv('HF_MAIL_FROM') ?: $smtpUser, 'Healing Friends');
+    $mail->addAddress($email, $name);
+    $mail->addReplyTo(getenv('HF_MAIL_FROM') ?: $smtpUser);
+    $mail->Subject = 'Confirmare preînregistrare Healing Friends';
+    $mail->Body = $body;
+    $mail->send();
+} catch (Throwable $e) {
+    flock($registrants, LOCK_UN);
+    fclose($registrants);
+    error_log('Healing Friends SMTP error: ' . $e->getMessage());
+    redirectMessage('Mesajul nu a putut fi trimis. Reîncercați mai târziu.');
+}
+fseek($registrants, 0, SEEK_END);
+fwrite($registrants, json_encode(['name' => $name, 'email' => $email, 'telephone' => $telephone, 'created_at' => gmdate('c')], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) . "\n");
+fflush($registrants);
+flock($registrants, LOCK_UN);
+fclose($registrants);
+redirectMessage('Preînregistrarea a fost transmisă. Verificați emailul pentru detalii.');
