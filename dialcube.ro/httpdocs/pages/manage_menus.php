@@ -9,5 +9,15 @@ include_once 'includes/menus-handler.php';
 <?php if (!empty($message)): ?><p><?= htmlspecialchars($message) ?></p><?php endif; ?>
 <table class="table"><thead><tr><th>Label</th><th>Link</th><th>Action</th></tr></thead><tbody>
 <?php foreach($menus as $item): ?><tr><td><?= htmlspecialchars($item['label']) ?></td><td><?= htmlspecialchars($item['link']) ?></td>
-<td><form method="POST"><input name="delete_id" type="hidden" value="<?= (int)$item['id'] ?>"><button name="delete_menu" class="btn btn-danger btn-sm">Delete</button></form></td></tr>
+<td>
+<form method="POST" class="d-inline">
+<input name="update_id" type="hidden" value="<?= (int)$item['id'] ?>">
+<input name="update_label" value="<?= htmlspecialchars($item['label'], ENT_QUOTES) ?>" required>
+<input name="update_link" value="<?= htmlspecialchars($item['link'], ENT_QUOTES) ?>" required>
+<button name="update_menu" class="btn btn-secondary btn-sm">Save</button>
+</form>
+<form method="POST" class="d-inline">
+<input name="delete_id" type="hidden" value="<?= (int)$item['id'] ?>">
+<button name="delete_menu" class="btn btn-danger btn-sm">Delete</button>
+</form></td></tr>
 <?php endforeach; ?></tbody></table>
