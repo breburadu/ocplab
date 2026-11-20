@@ -1,3 +1,9 @@
+<?php
+session_start();
+if (empty($_SESSION['csrf_token'])) { $_SESSION['csrf_token'] = bin2hex(random_bytes(32)); }
+$flashMessage = $_SESSION['flash_message'] ?? null;
+unset($_SESSION['flash_message']);
+?>
 <!DOCTYPE html>
 <html lang="ro">
 <head>
@@ -123,7 +129,7 @@
     // JavaScript to load the disclaimer or GDPR content into a styled popup
     function showPopup(file, title) {
         fetch(file)
-            .then(response => response.text())
+            .then(response => { if (!response.ok) throw new Error("Missing document"); return response.text(); })
             .then(data => {
                 let popupWindow = window.open("", title, "width=600,height=400");
                 popupWindow.document.write(`
@@ -167,7 +173,7 @@
                     <body>
                         <div class="container">
                             <h1>${title}</h1>
-                            <p>${data.replace(/\n/g, '<br>')}</p>
+                            <p>${data.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replace(/\n/g, "<br>")}</p>
                             <div class="footer">
                                 <p>&copy; 2024 Laura Elena Busuioc</p>
                             </div>
@@ -203,7 +209,7 @@
         <?php
         $filename = "content.txt";
         if (file_exists($filename)) {
-            echo nl2br(file_get_contents($filename));
+            echo nl2br(htmlspecialchars(file_get_contents($filename), ENT_QUOTES, "UTF-8"));
         } else {
             echo "<p>Fișierul de conținut nu a fost găsit.</p>";
         }
@@ -217,13 +223,13 @@
         if (file_exists($dateFile)) {
             $eventDate = file_get_contents($dateFile);
             $formattedDate = substr($eventDate, 0, 2) . '-' . substr($eventDate, 2, 2) . '-' . substr($eventDate, 4);
-            echo "<h2 class='event-info'>Data evenimentului: $formattedDate</h2>";
+            echo "<h2 class='event-info'>Data evenimentului: " . htmlspecialchars($formattedDate, ENT_QUOTES, "UTF-8") . "</h2>";
         } else {
             echo "<h2>Data evenimentului nu a fost găsită.</h2>";
         }
         if (file_exists($priceFile)) {
             $eventPrice = file_get_contents($priceFile);
-            echo "<h2 class='event-info'>Prețul evenimentului: $eventPrice RON</h2>";
+            echo "<h2 class='event-info'>Prețul evenimentului: " . htmlspecialchars($eventPrice, ENT_QUOTES, "UTF-8") . " RON</h2>";
         } else {
             echo "<h2>Prețul evenimentului nu a fost găsit.</h2>";
         }
@@ -233,7 +239,9 @@
     <section class="register-section">
         <h2>Înscrie-te acum!</h2>
         
+        <?php if ($flashMessage): ?><p role="status"><?= htmlspecialchars((string)$flashMessage, ENT_QUOTES, "UTF-8") ?></p><?php endif; ?>
         <form name="registerForm" action="register.php" method="post" class="register-form" onsubmit="return validateForm()">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token'], ENT_QUOTES, 'UTF-8') ?>">
             <div class="form-group">
                 <label for="name">Numele tău:</label>
                 <input type="text" name="name" id="name" class="form-control" placeholder="Numele tău" required aria-required="true">
