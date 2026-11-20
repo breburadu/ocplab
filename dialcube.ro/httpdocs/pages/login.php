@@ -1,0 +1,20 @@
+<?php
+include_once 'includes/admin-login-handler.php';
+?>
+<div class="row">
+  <div class="col-md-4 offset-md-4">
+    <h2 class="mb-4 text-center">Admin Login</h2>
+    <?php if (!empty($error)) echo "<div class='alert alert-danger'>{$error}</div>"; ?>
+    <form method="POST">
+      <div class="mb-3">
+        <label class="form-label">Username</label>
+        <input type="text" name="username" class="form-control" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Password</label>
+        <input type="password" name="password" class="form-control" required>
+      </div>
+      <button type="submit" name="login_admin" class="btn btn-primary w-100">Login</button>
+    </form>
+  </div>
+</div>
