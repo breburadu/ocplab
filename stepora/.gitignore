@@ -1,0 +1,20 @@
+# Never commit runtime credentials or private customer data
+.env
+.env.*
+!.env.example
+!.env.production.template
+storage/*
+!storage/.gitkeep
+public/uploads/*
+!public/uploads/.gitkeep
+vendor/
+node_modules/
+*.log
+*.bak
+*.backup
+*.sql.gz
+*.sql.zip
+*.dump
+.DS_Store
+.idea/
+.vscode/
