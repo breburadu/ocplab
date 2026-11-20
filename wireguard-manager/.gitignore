@@ -1,0 +1,12 @@
+# Never commit WireGuard private keys, generated VPN profiles, or manager state
+**/state.json
+**/exports/
+**/privatekey
+**/*.key
+wg*.conf
+**/wg*.conf
+*.png
+__pycache__/
+*.py[cod]
+*.log
+.env
