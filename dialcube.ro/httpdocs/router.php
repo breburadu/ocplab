@@ -1,5 +1,6 @@
 <?php
 function route() {
+    global $conn;
     $page = $_GET['page'] ?? 'home';
 
     // Whitelist of allowed pages (explicit control)
