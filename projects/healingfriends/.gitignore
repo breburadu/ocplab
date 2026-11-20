@@ -1,0 +1,9 @@
+**/.env
+**/.env.*
+!**/.env.example
+**/registrants.txt
+**/ip_log.txt
+**/vendor/
+**/storage/
+**/logs/
+*.log
