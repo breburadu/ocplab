@@ -5,6 +5,9 @@ import subprocess, sys, tarfile, time, uuid, threading
 from pathlib import Path
 import xml.etree.ElementTree as ET
 import yaml
+from modules import normalize, listing
+import host
+import exposure
 
 
 def run(args, *, check=True, capture=True, timeout=180, input=None):
@@ -41,6 +44,12 @@ def load_yaml(path):
 
 
 def valid_config(c):
+    exposure.settings(c)
+    for key,default in [('poll_seconds',30),('diagnostic_seconds',120),('api_seconds',900)]:
+        value=c.get('waits',{}).get(key,default)
+        assert isinstance(value,int) and 1<=value<=86400, 'Invalid waits.'+key
+    from modules import selected
+    selected(c)
     assert len(c['nodes']) == 3, 'Exactly three control-plane/worker nodes required'
     assert re.fullmatch(r'4\.\d+\.\d+', c['release']), 'Pin an exact release'
     for x in [c['cluster_name'], c['base_domain'], c['registry']['hostname'], c['network']['name']]:
@@ -72,6 +81,7 @@ def valid_config(c):
 
 class Lab:
     def __init__(self,c):
+        c=normalize(json.loads(json.dumps(c)))
         valid_config(c); self.c=c; self.w=Path(c['work_dir']); self.net=c['network']
         self.gw=self.net['gateway']; self.reg=f"{c['registry']['hostname']}:{c['registry']['port']}"
         self.domain=f"{c['cluster_name']}.{c['base_domain']}"
@@ -103,7 +113,7 @@ class Lab:
                 except subprocess.TimeoutExpired: proc.kill(); proc.wait()
                 reader.join(); proc.stdout.close(); raise
             reader.join(); proc.stdout.close()
-        assert code==0,f'Stage failed; inspect {path}. No resources were deleted.'
+        if code: raise RuntimeError(f'Stage failed; inspect {path}. No resources were deleted.')
         print(f'SUBTASK {name} completed',flush=True)
     def vir(self,*args,**kw): return run(['virsh','--connect','qemu:///system',*args],**kw)
     def exists(self,name): return self.vir('dominfo',name,check=False).returncode==0
@@ -124,8 +134,7 @@ class Lab:
         os.replace(tmp,path); os.chmod(path,0o644)
     def preflight(self):
         assert os.geteuid()==0,'Run as root'
-        osrel=Path('/etc/os-release').read_text()
-        assert 'ID=debian' in osrel and 'VERSION_ID="12"' in osrel,'This project targets Debian 12'
+        print('Detected host: '+host.profile()['name'],flush=True)
         assert Path('/dev/kvm').exists(),'/dev/kvm missing'
         assert self.c['host_faults_remediated'], ('Set host_faults_remediated=true only after investigating the observed QEMU '
           'double-free crash and guest corruption; this automation cannot diagnose or repair the host hardware.')
@@ -141,6 +150,10 @@ class Lab:
         assert shutil.disk_usage(self.w).free>50*1024**3,'Less than 50 GiB free'
         if Path('/sys/module/kvm_intel/parameters/nested').exists() and self.c['virtualization']['enabled']:
             assert Path('/sys/module/kvm_intel/parameters/nested').read_text().strip() in ['Y','1'],'Nested KVM disabled'
+        for module in ['kvm_intel','kvm_amd']:
+            nested=Path('/sys/module')/module/'parameters/nested'
+            if nested.exists() and self.c['virtualization']['enabled']:
+                assert nested.read_text().strip() in ['Y','1'], 'Nested KVM disabled'
         print(f'Preflight OK. Physical RAM {total} MiB; configured VM+host budget {requested} MiB.')
         self.mark('preflight')
     def network_xml(self):
@@ -148,7 +161,9 @@ class Lab:
         ET.SubElement(root,'name').text=n['name']; ET.SubElement(root,'uuid').text=n['uuid']
         if not n['isolate_guests']: ET.SubElement(root,'forward',{'mode':'nat'})
         ET.SubElement(root,'bridge',{'name':n['bridge'],'stp':'on','delay':'0'})
-        dns=ET.SubElement(root,'dns'); host=ET.SubElement(dns,'host',{'ip':self.gw})
+        dns=ET.SubElement(root,'dns')
+        for ip in exposure.settings(self.c)['upstream_dns']: ET.SubElement(dns,'forwarder',{'addr':ip})
+        host=ET.SubElement(dns,'host',{'ip':self.gw})
         for name in ['api.'+self.domain,'api-int.'+self.domain,self.c['registry']['hostname']]: ET.SubElement(host,'hostname').text=name
         for node in self.nodes:
             h=ET.SubElement(dns,'host',{'ip':node['ip']}); ET.SubElement(h,'hostname').text=node['name']+'.'+self.c['base_domain']
@@ -177,15 +192,20 @@ defaults
 '''
         for name,port in [('api',6443),('mcs',22623),('http',80),('https',443)]:
             text+=f'frontend ocp_{name}\n    bind {self.gw}:{port}\n    default_backend ocp_{name}_nodes\nbackend ocp_{name}_nodes\n    balance roundrobin\n    option tcp-check\n'
+            if port!=22623:
+                binds=''.join(f'    bind {ip}:{port}\n' for ip in exposure.settings(self.c)['lan_ips'])
+                text=text.replace(f'    bind {self.gw}:{port}\n',f'    bind {self.gw}:{port}\n'+binds)
             nodes=(self.nodes if bootstrap and port in [6443,22623] else self.c['nodes'])
             for n in nodes: text+=f"    server {n['name']} {n['ip']}:{port} check inter 5s fall 3 rise 2\n"
+        text+=exposure.proxy_text(self)
         candidate=self.w/'haproxy.cfg'; write(candidate,text)
         run(['haproxy','-c','-f',candidate]); write('/etc/haproxy/haproxy.cfg',text,0o644)
         run(['systemctl','reload-or-restart','haproxy'])
     def prepare(self):
         self.preflight(); assert self.c['manage_host_services'],'manage_host_services must be true'
-        for s in ['libvirtd','nginx','haproxy','chrony']: run(['systemctl','enable',s])
-        run(['systemctl','start','libvirtd'])
+        host.libvirt_start(run)
+        for s in ['nginx','haproxy']: run(['systemctl','enable',s])
+        write(self.w/'qemu-emulator',host.emulator(run))
         # Never replace an existing unowned network or mutate live network leases.
         xml=self.network_xml(); netfile=self.w/'network.xml'
         old=self.vir('net-dumpxml',self.net['name'],check=False)
@@ -213,7 +233,7 @@ defaults
         entry=f'{pub} {target} none bind,ro 0 0'
         fstab=Path('/etc/fstab').read_text()
         if entry not in fstab: write('/etc/fstab',fstab+'\n'+entry+'\n',0o644)
-        write('/etc/nginx/sites-available/ocplab-auto',f'''server {{
+        write('/etc/nginx/conf.d/ocplab-auto.conf',f'''server {{
  listen {self.gw}:{self.c['http_port']};
  root {target};
  autoindex off;
@@ -223,20 +243,22 @@ defaults
 }}
 ''',0o644)
         Path('/etc/nginx/sites-enabled/default').unlink(missing_ok=True)
-        link=Path('/etc/nginx/sites-enabled/ocplab-auto')
-        if not link.exists(): link.symlink_to('/etc/nginx/sites-available/ocplab-auto')
-        write('/etc/systemd/system/nginx.service.d/ocplab-auto.conf',f'[Unit]\nAfter=libvirtd.service\nWants=libvirtd.service\nRequiresMountsFor={target}\n[Service]\nRestart=on-failure\nRestartSec=10\n',0o644)
-        write('/etc/systemd/system/haproxy.service.d/ocplab-auto.conf','[Unit]\nAfter=libvirtd.service\nWants=libvirtd.service\n[Service]\nRestart=on-failure\nRestartSec=10\n',0o644)
+        Path('/etc/nginx/sites-enabled/ocplab-auto').unlink(missing_ok=True)
+        host.nginx_default(self)
+        host.selinux(self)
+        write('/etc/systemd/system/nginx.service.d/ocplab-auto.conf',f'[Unit]\nAfter=network-online.target libvirtd.service virtnetworkd.service\nWants=network-online.target\nRequiresMountsFor={target}\n[Service]\nRestart=on-failure\nRestartSec=10\n',0o644)
+        write('/etc/systemd/system/haproxy.service.d/ocplab-auto.conf','[Unit]\nAfter=network-online.target libvirtd.service virtnetworkd.service\nWants=network-online.target\n[Service]\nRestart=on-failure\nRestartSec=10\n',0o644)
         run(['systemctl','daemon-reload'])
         run(['nginx','-t']); run(['systemctl','restart','nginx'])
+        host.chrony(self)
+        hosts=Path('/etc/hosts').read_text()
+        hosts=re.sub(r'\n# BEGIN OCPLAB AUTO.*?# END OCPLAB AUTO\n','\n',hosts,flags=re.S)
+        records=[f'{self.gw} api.{self.domain} api-int.{self.domain} {self.c["registry"]["hostname"]}']
+        records += [f'{n["ip"]} {n["name"]} {n["name"]}.{self.c["base_domain"]}' for n in self.nodes]
+        write('/etc/hosts',hosts+'\n# BEGIN OCPLAB AUTO\n'+'\n'.join(records)+'\n# END OCPLAB AUTO\n',0o644)
+        host.resolver(self)
+        exposure.setup(self)
         self.haproxy(not (self.state/'bootstrap-complete').exists())
-        write('/etc/chrony/conf.d/ocplab-auto.conf',f'allow {self.net["cidr"]}\nlocal stratum 10\n',0o644)
-        write('/etc/chrony/sources.d/ocplab-auto.sources',''.join(f'pool {x} iburst\n' for x in self.c['ntp_upstreams']),0o644)
-        run(['systemctl','restart','chrony'])
-        # Resolver for .local and wildcard routes. Local DNS answers first, then upstream.
-        # /etc/hosts guarantees host access to installer/registry even without resolved.
-        hosts=Path('/etc/hosts').read_text(); hosts=re.sub(r'\n# BEGIN OCPLAB AUTO.*?# END OCPLAB AUTO\n','\n',hosts,flags=re.S)
-        write('/etc/hosts',hosts+f'\n# BEGIN OCPLAB AUTO\n{self.gw} api.{self.domain} api-int.{self.domain} {self.c["registry"]["hostname"]}\n# END OCPLAB AUTO\n',0o644)
         self.registry(); self.tools(); self.mark('prepare')
     def registry(self):
         r=self.c['registry']; d=self.w/'registry'
@@ -248,9 +270,9 @@ defaults
             write(d/'certs/extensions',f'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:{r["hostname"]},IP:{self.gw}\n')
             run(['openssl','x509','-req','-in',d/'certs/registry.csr','-CA',d/'ca/ca.crt','-CAkey',d/'ca/ca.key','-CAcreateserial','-out',d/'certs/registry.crt','-days','825','-extfile',d/'certs/extensions'])
         for f in [d/'ca/ca.key',d/'certs/registry.key']: f.chmod(0o600)
-        write('/usr/local/share/ca-certificates/ocplab-auto.crt',(d/'ca/ca.crt').read_bytes(),0o644)
+        write(host.profile()['ca_path'],(d/'ca/ca.crt').read_bytes(),0o644)
         write('/etc/containers/certs.d/'+self.reg+'/ca.crt',(d/'ca/ca.crt').read_bytes(),0o644)
-        run(['update-ca-certificates'])
+        run([host.profile()['ca_command']])
         run(['podman','pull',r['image']],timeout=1800)
         image=run(['podman','image','inspect',r['image'],'--format','{{.Id}}'])
         write(self.w/'registry-image-id',image+'\n')
@@ -263,7 +285,7 @@ StartLimitIntervalSec=0
 Restart=always
 RestartSec=10
 ExecStartPre=/usr/sbin/ip address show {self.net['bridge']}
-ExecStart=/usr/bin/podman run --rm --name {r['container']} -p {self.gw}:{r['port']}:5000 -v {d}/data:/var/lib/registry -v {d}/certs:/certs:ro -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/registry.crt -e REGISTRY_HTTP_TLS_KEY=/certs/registry.key {image}
+ExecStart=/usr/bin/podman run --rm --name {r['container']} -p {self.gw}:{r['port']}:5000 -v {d}/data:/var/lib/registry:Z -v {d}/certs:/certs:ro,Z -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/registry.crt -e REGISTRY_HTTP_TLS_KEY=/certs/registry.key {image}
 ExecStop=/usr/bin/podman stop -t 30 {r['container']}
 TimeoutStartSec=120
 TimeoutStopSec=60
@@ -374,7 +396,7 @@ WantedBy=multi-user.target
         ET.SubElement(d,'on_poweroff').text='destroy'
         ET.SubElement(d,'on_reboot').text='destroy' if install else 'restart'
         ET.SubElement(d,'on_crash').text='preserve'
-        dev=ET.SubElement(d,'devices'); ET.SubElement(dev,'emulator').text='/usr/bin/qemu-system-x86_64'
+        dev=ET.SubElement(d,'devices'); ET.SubElement(dev,'emulator').text=(self.w/'qemu-emulator').read_text().strip() if (self.w/'qemu-emulator').exists() else '/usr/bin/qemu-system-x86_64'
         disk=ET.SubElement(dev,'disk',{'type':'file','device':'disk'})
         ET.SubElement(disk,'driver',{'name':'qemu','type':self.c['disk_format'],'cache':'none','io':'native'})
         ET.SubElement(disk,'source',{'file':str(self.disk(n))}); ET.SubElement(disk,'target',{'dev':'vda','bus':'virtio'})
@@ -402,7 +424,7 @@ WantedBy=multi-user.target
             if not owned.exists():
                 assert not self.exists(n['name']) and not disk.exists(),f'Existing VM or disk {n["name"]}; no overwrite allowed'
                 run(['qemu-img','create','-f',self.c['disk_format'],disk,str(n['disk_gib'])+'G'])
-                run(['chown','libvirt-qemu:kvm',disk]); os.chmod(disk,0o600)
+                run(['chown',host.profile()['qemu_owner'],disk]); os.chmod(disk,0o600)
                 xml=self.w/(n['name']+'-install.xml'); write(xml,self.domain_xml(n,True))
                 self.vir('define',xml); self.mark('owned-'+n['name']); self.vir('start',n['name'])
             if not installed.exists():
@@ -441,27 +463,70 @@ WantedBy=multi-user.target
         assert json.loads(ignition).get('ignition'),'Installed Ignition missing'
         role='bootstrap' if n==self.c['bootstrap'] else 'master'
         assert json.loads(ignition)==json.loads((self.ins/(role+'.ign')).read_text()),'Installed Ignition differs from source'
+    def progress(self,namespace=None):
+        checks=[('operators',('get','co')),('nodes',('get','nodes'))]
+        if namespace:
+            checks=[('pods',('-n',namespace,'get','pods','-o','wide')),
+                    ('events',('-n',namespace,'get','events','--field-selector=type=Warning','--sort-by=.lastTimestamp'))]
+        for title,args in checks:
+            try:
+                p=self.ocmd(*args,check=False,timeout=45)
+                print(title+':\n'+(p.stdout or p.stderr or '')[-6000:],flush=True)
+            except subprocess.TimeoutExpired:
+                print(title+': API query timed out; continuing wait',flush=True)
+    def wait_for(self,description,check,timeout,namespace=None):
+        deadline=time.monotonic()+timeout
+        interval=self.c.get('waits',{}).get('poll_seconds',30)
+        diagnostic=self.c.get('waits',{}).get('diagnostic_seconds',120)
+        next_diagnostic=0; last='not ready'
+        while time.monotonic()<deadline:
+            try:
+                if check():
+                    print(description+': ready',flush=True); return
+            except (RuntimeError,subprocess.TimeoutExpired,ConnectionError) as exc:
+                last=str(exc)[-800:]
+            if time.monotonic()>=next_diagnostic:
+                print(f'WAIT {description}; remaining {int(deadline-time.monotonic())}s; {last}',flush=True)
+                self.progress(namespace); next_diagnostic=time.monotonic()+diagnostic
+            time.sleep(min(interval,max(0,deadline-time.monotonic())))
+        self.progress(namespace)
+        raise RuntimeError(description+' timed out; last error: '+last+'; resources retained, rerun the same phase')
+    def installer_wait(self,event,timeout):
+        deadline=time.monotonic()+timeout
+        while time.monotonic()<deadline:
+            try:
+                self.logrun([self.inst,'wait-for',event,'--dir',self.ins,'--log-level=info'],event,max(1,int(deadline-time.monotonic())))
+                return
+            except (RuntimeError,subprocess.TimeoutExpired):
+                self.crash_guard(); self.progress()
+                if time.monotonic()>=deadline: raise
+                print('Installer wait ended; retrying within configured overall deadline',flush=True)
+                time.sleep(min(30,max(0,deadline-time.monotonic())))
+        raise RuntimeError(event+' deadline exceeded')
     def complete(self):
         self.require('vms'); self.crash_guard()
         if not (self.state/'bootstrap-complete').exists():
-            deadline=time.time()+self.c['timeouts']['bootstrap_seconds']
-            while True:
-                try:
-                    self.logrun([self.inst,'wait-for','bootstrap-complete','--dir',self.ins,'--log-level=info'],'bootstrap',max(60,int(deadline-time.time())))
-                    break
-                except (RuntimeError,subprocess.TimeoutExpired):
-                    self.crash_guard()
-                    if time.time()>=deadline: raise
-                    time.sleep(30)
+            self.installer_wait('bootstrap-complete',self.c['timeouts']['bootstrap_seconds'])
             self.mark('bootstrap-complete')
         self.haproxy(False)
-        # Ensure API works without bootstrap before shutdown; retain disk/domain for diagnosis.
-        assert self.ocmd('get','--raw=/readyz').strip()=='ok','Permanent API readiness failed'
-        if self.vir('domstate',self.c['bootstrap']['name'])=='running': self.vir('shutdown',self.c['bootstrap']['name'])
+        self.wait_for('permanent API',lambda:self.ocmd('get','--raw=/readyz').strip()=='ok',
+                      self.c.get('waits',{}).get('api_seconds',900))
+        if self.vir('domstate',self.c['bootstrap']['name'])=='running':
+            self.vir('shutdown',self.c['bootstrap']['name'])
         if self.c['image_registry_emptydir']:
-            self.ocmd('patch','configs.imageregistry.operator.openshift.io','cluster','--type=merge','-p',json.dumps({'spec':{'managementState':'Managed','replicas':1,'storage':{'emptyDir':{}}}}))
-        self.logrun([self.inst,'wait-for','install-complete','--dir',self.ins,'--log-level=info'],'install-complete',self.c['timeouts']['cluster_seconds'])
+            def registry_ready():
+                self.ocmd('patch','configs.imageregistry.operator.openshift.io','cluster','--type=merge','-p',json.dumps({'spec':{'managementState':'Managed','replicas':1,'storage':{'emptyDir':{}}}}))
+                return True
+            self.wait_for('image registry configuration',registry_ready,900)
+        self.installer_wait('install-complete',self.c['timeouts']['cluster_seconds'])
         self.mark('complete')
+    def expose(self):
+        self.require('complete')
+        exposure.publish(self)
+    def modules(self):
+        print(json.dumps(listing(self.c),indent=2))
+        if self.c.get('modules',{}).get('list_catalog_packages',False):
+            print(self.ocmd('get','packagemanifests','-A','-o','custom-columns=NAME:.metadata.name,CATALOG:.status.catalogSource,CHANNEL:.status.defaultChannel'))
     def fix_catalog(self,cat):
         image=cat['spec']['image']
         if image.endswith('-permissions-fixed'):
@@ -568,7 +633,7 @@ WantedBy=multi-user.target
 
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument('--config',required=True)
-    parser.add_argument('phase',choices=['preflight','prepare','mirror','assets','ignition','vms','complete','virtualization','storage','validate','diagnostics'])
+    parser.add_argument('phase',choices=['preflight','prepare','mirror','assets','ignition','vms','complete','virtualization','storage','expose','modules','validate','diagnostics'])
     args=parser.parse_args(); os.umask(0o077)
     c=json.loads(Path(args.config).read_text()); lab=Lab(c)
     # Prevent simultaneous runs modifying cluster state.
@@ -592,7 +657,7 @@ def main():
             if args.phase=='prepare': lab.preflight()
             lock=lab.state/'config.sha256'
             fingerprint=hashlib.sha256(json.dumps(c,sort_keys=True).encode()).hexdigest()
-            if args.phase not in ['preflight','diagnostics']:
+            if args.phase not in ['preflight','diagnostics','modules']:
                 if lock.exists():
                     if lock.read_text().strip()!=fingerprint:
                         # Recover only the exact historical consent-only lock failure.

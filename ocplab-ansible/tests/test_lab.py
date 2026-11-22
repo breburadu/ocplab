@@ -1,8 +1,10 @@
+import sys
 import copy, importlib.util, json, tempfile, unittest
 from pathlib import Path
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'scripts'))
 spec=importlib.util.spec_from_file_location('lab',ROOT/'scripts/lab.py')
 mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
 
@@ -21,6 +23,7 @@ class Tests(unittest.TestCase):
         self.c['service_cidr']=self.c['network']['cidr']
         with self.assertRaises(AssertionError): mod.valid_config(self.c)
     def test_isolation_has_no_nat(self):
+        self.lab.net['isolate_guests']=True
         x=ET.fromstring(self.lab.network_xml()); self.assertIsNone(x.find('forward'))
         self.assertEqual(len(x.findall('ip/dhcp/host')),4)
     def test_vm_install_to_disk_transition(self):

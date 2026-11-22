@@ -2,7 +2,23 @@
 set -euo pipefail
 umask 077
 cd "$(dirname "$0")"
-phase="${1:-preflight}"
+phase="${1:-}"
+if [ -z "$phase" ]; then
+  PS3='Select action: '
+  select choice in 'Assess hardware' 'Configure installation' 'List modules' 'Run preflight'; do
+    case "$REPLY" in
+      1) exec python3 scripts/hardware.py ;;
+      2) exec python3 scripts/configure.py ;;
+      3) exec python3 scripts/modules.py ;;
+      4) phase=preflight; break ;;
+    esac
+  done
+fi
+case "$phase" in
+  assess) exec python3 scripts/hardware.py "${@:2}" ;;
+  configure) exec python3 scripts/configure.py "${@:2}" ;;
+  list-modules) exec python3 scripts/modules.py ;;
+esac
 config="$(realpath "${2:-config/lab.json}")"
 work_dir=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["work_dir"])' "$config")
 mkdir -p "$work_dir/logs"

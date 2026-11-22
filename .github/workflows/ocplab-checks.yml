@@ -1,0 +1,26 @@
+name: OpenShift lab checks
+on:
+  push:
+    paths: ['ocplab-ansible/**', '.github/workflows/ocplab-checks.yml']
+  pull_request:
+    paths: ['ocplab-ansible/**', '.github/workflows/ocplab-checks.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ocplab-ansible
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install PyYAML ansible-core
+      - run: python -m compileall -q scripts tests
+      - run: bash -n run.sh start-screen.sh bootstrap-host.sh scripts/session_run.sh
+      - run: python -m unittest discover -s tests -v
+      - run: ansible-playbook --syntax-check playbooks/site.yml
+      - run: python scripts/hardware.py && python scripts/modules.py

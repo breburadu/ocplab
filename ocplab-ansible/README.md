@@ -1,16 +1,18 @@
-# OpenShift compact KVM lab automation — v2.0
+# OpenShift compact KVM lab automation — v3.0
 
 ## 1. Start the installation
 
-Run these commands **on the Debian 12 KVM host as root**. This project contains code and example configuration, not your pull secret, private key, or an installed cluster. It deploys classic UPI: temporary bootstrap plus three schedulable control-plane nodes, a local image mirror, OpenShift Virtualization, and dedicated Hostpath storage.
+Run these commands **on the dedicated x86_64 Linux KVM host as root** (Debian, Ubuntu, RHEL or Fedora). This project contains code and example configuration, not your pull secret, private key, or an installed cluster. It deploys classic UPI: temporary bootstrap plus three schedulable control-plane nodes, a local image mirror, OpenShift Virtualization, and dedicated Hostpath storage.
 
 ### New installation
 
 ```bash
 git clone https://github.com/breburadu/breburadu.git
 cd breburadu/ocplab-ansible
-apt-get update
-apt-get install -y ansible python3-yaml screen unzip
+# Read-only, no Ansible needed:
+./run.sh assess
+# Or ./run.sh for the initial assessment/setup/module menu.
+./bootstrap-host.sh
 python3 scripts/configure.py
 chmod 600 config/lab.json /root/ocp/secrets/pull-secret.json
 ./run.sh preflight
@@ -23,7 +25,7 @@ The Screen launcher runs the following sequence and **stops at the first failed 
 
 ```text
 preflight → prepare → mirror → assets → ignition → vms → complete
-          → virtualization → storage → validate
+          → virtualization → storage → expose → validate
 ```
 
 One Screen session contains two command-line windows:
@@ -58,9 +60,90 @@ python3 scripts/upgrade_config.py config/lab.json --adopt-storage
 ./start-screen.sh config/lab.json storage validate
 ```
 
-The migration checks the old config fingerprint, acquires the engine lock, backs up the old config and fingerprint, and adds only the new catalog/storage options. `--adopt-storage` is for the three raw data disks already created during our test. Adoption requires the expected disk filename, size, live attachment, and mounted XFS filesystem. It never formats an adopted disk. Without existing data disks, omit `--adopt-storage`.
+The migration checks the old config fingerprint, acquires the engine lock, backs up the old config and fingerprint, and adds new catalog/storage options. Optional `--settings` merges only operational module/exposure/wait/timeout settings, preserving identity and network. `--adopt-storage` is for the three raw data disks already created during our test. Adoption requires the expected disk filename, size, live attachment, and mounted XFS filesystem. It never formats an adopted disk. Without existing data disks, omit `--adopt-storage`.
 
 If a previous job is running, wait for it to finish before upgrading. Do not delete a lock file to make a second installer start.
+
+
+### Hardware assessment and module selection
+
+`./run.sh` opens the initial menu. `./run.sh assess` (or `python3 scripts/hardware.py --disk-path /var/lib/libvirt/images`) is read-only and works without Ansible or a configuration file. It reports distribution, CPU count, CPU virtualization flags, /dev/kvm, nested KVM, total/available RAM and filesystem free space. It suggests bootstrap and per-node sizes. Setup can apply the suggestion only when explicitly selected.
+
+This installer still implements **three compact masters plus bootstrap**, not arbitrary node counts or single-node OpenShift. Four 16 GiB guests plus a 4 GiB host reserve require 68 GiB at bootstrap peak; a 62 GiB host requires explicit memory overcommit. CPU recommendations may overcommit logical CPUs. Storage budget is 460 GiB OS + 240 GiB data + 100 GiB reserve, plus additional room for mirrors. Sparse files do not reserve all of this space.
+
+`./bootstrap-host.sh` installs Ansible/PyYAML/Screen prerequisites using APT or DNF. The prepare playbook selects distribution packages. RHEL requires suitable enabled repositories and entitlements; this script does not enable third-party repositories. Package availability, nested KVM and SELinux/firewall behavior must be validated on your host. RHEL-family handling includes QEMU ownership, discovered emulator, modular/monolithic libvirt, Chrony service, CA trust and targeted SELinux settings. SELinux is not disabled.
+
+| Configuration | Behavior |
+|---|---|
+| `modules.selected` | `["core","virtualization","storage"]` by default. Core required; storage requires virtualization. Use `["core"]` for no optional operators. |
+| `modules.list_catalog_packages` | False by default. When true, `./run.sh modules` additionally queries installed catalog PackageManifests. Requires a working cluster/catalog. |
+| `waits.poll_seconds` | 30; readiness polling interval. |
+| `waits.diagnostic_seconds` | 120; print operator/node or pod/warning-event snapshots while waiting. |
+| `waits.api_seconds` | 900; permanent API readiness after bootstrap. |
+| `exposure.lan_ips` | Assigned IPv4 addresses for LAN HAProxy/DNS listeners; empty by default. Reserve DHCP addresses first. |
+| `exposure.allowed_cidrs` | Required when LAN listeners are enabled; restrict access to those source networks. |
+| `exposure.dns_enabled` | True; separate LAN dnsmasq when LAN IPs exist. Internal libvirt DNS remains separate. |
+| `exposure.upstream_dns` | Explicit upstream IPv4 resolvers, used by libvirt and LAN DNS; avoids recursion through the host resolver. |
+| `exposure.tcp_forwards` | Selected VM TCP ports exposed through HAProxy. |
+| `exposure.services` | Selected selector-backed Kubernetes TCP Services exposed through generated NodePort Services and HAProxy. |
+
+`./run.sh list-modules` and `python3 scripts/configure.py --list-modules` list the managed modules offline. The Python setup also prompts for module selection. Catalog package discovery is informational: this installer does not claim to install every arbitrary Operator or supply its custom resource configuration. Changing the selected list does not uninstall existing operators or delete disks.
+
+### LAN access, pod workloads and DNS
+
+Example operational settings file (`lan-settings.json`) for the existing test host:
+
+```json
+{
+  "exposure": {
+    "lan_ips": ["10.20.30.40"],
+    "allowed_cidrs": ["10.20.30.0/24"],
+    "dns_enabled": true,
+    "upstream_dns": ["1.1.1.1", "1.0.0.1"],
+    "tcp_forwards": [
+      {"name": "node1-ssh", "listen_port": 2221, "host": "ocplab-node-1", "port": 22}
+    ],
+    "services": [
+      {"name": "demo", "namespace": "demo-app", "service": "demo-web", "port": 8080, "listen_port": 18080}
+    ]
+  },
+  "waits": {"poll_seconds": 30, "diagnostic_seconds": 120, "api_seconds": 900},
+  "timeouts": {"bootstrap_seconds": 14400, "cluster_seconds": 14400}
+}
+```
+
+The demo Service must already exist; omit the services entry until it does. For a new installation, set exposure in config/lab.json during setup. For an existing locked install:
+
+```bash
+python3 scripts/upgrade_config.py config/lab.json --settings lan-settings.json
+./run.sh expose
+```
+
+The `expose` stage requires completion, creates managed `lab-proxy-NAME` NodePort Services, and reloads HAProxy after syntax validation. It preserves original Services. It does not delete previously generated proxy Services when entries are removed; remove unused ones deliberately with `oc delete service` after confirming no consumers.
+
+Traffic paths:
+- API: LAN IP:6443 → HAProxy → node:6443.
+- Console/OAuth/HTTP apps: LAN IP:80/443 → HAProxy → OpenShift ingress → Service → pods.
+- Additional pod workload: LAN IP:18080 → HAProxy → node:allocated NodePort → selected Service endpoints.
+- VM SSH example: LAN IP:2221 → HAProxy → node1:22.
+
+Pod CIDR (`cluster_cidr`), Service CIDR (`service_cidr`) and VM CIDR are distinct, nonoverlapping networks. **HAProxy publishes TCP endpoints; it does not route an entire pod subnet.** No direct route to Pod IPs or ClusterIPs is assumed. Ordinary web workloads should use OpenShift Routes; explicit Service proxies cover additional TCP protocols. UDP publication is not implemented.
+
+Machine-config port 22623 stays on the internal gateway. No general DNAT, forwarding-policy reset or global firewall flush is performed. A dedicated nftables table limits LAN listener sources; firewalld rules are added when active. Other site firewall policies still apply. Removing exposure entries does not remove pre-existing firewalld allowances; review those as part of decommissioning.
+
+LAN clients use the bastion's LAN DNS address (or a router conditional forward for `ocplab.lab.local`). API and wildcard apps resolve to the first configured LAN IP. Internal clients retain gateway answers. The bastion receives managed /etc/hosts entries for API/registry/nodes and split DNS through systemd-resolved or NetworkManager; unmanaged regular resolv.conf is backed up and pointed to libvirt DNS. Managed symlinks without a supported resolver fail with instructions instead of being overwritten. Libvirt uses explicit upstreams to prevent a resolver loop.
+
+Checks:
+```bash
+getent hosts api.ocplab.lab.local
+getent hosts console-openshift-console.apps.ocplab.lab.local
+nslookup console-openshift-console.apps.ocplab.lab.local 10.20.30.40
+curl -k --resolve api.ocplab.lab.local:6443:10.20.30.40 https://api.ocplab.lab.local:6443/readyz
+```
+
+Existing v2 installations retain their network definition and isolation setting. Do not rerun prepare to recreate a live network: v3 adds explicit DNS forwarders to newly generated network definitions and rejects mismatched existing definitions. For an existing network, review its DNS forwarders before changing the bastion resolver. The standalone expose phase does not recreate the libvirt network or change the bastion resolver.
+
+Completion now retries installer wait commands within the configured total budget. Transient API failures in readiness waits are retried, with periodic bounded diagnostics. Disk identity mismatches, foreign resources, malformed configuration, QEMU crashes, and a failed storage smoke pod still stop immediately; waiting longer must not conceal these failures.
 
 ## 2. Configuration parameters
 
@@ -94,7 +177,7 @@ All user-specific values live in `config/lab.json`. Secrets are referenced by pa
 | `network.bridge` | Linux bridge, `virbr-ocp`. |
 | `network.cidr`, `.gateway` | `192.168.123.0/24`, `192.168.123.1`. |
 | `network.dhcp_start`, `.dhcp_end` | Dynamic range `.100` through `.200`; reserved node addresses must be outside it. |
-| `network.isolate_guests` | True omits libvirt NAT forwarding. False enables NAT. Does not establish physical air-gap proof or isolate the host itself. |
+| `network.isolate_guests` | **False by default** enables NAT. True omits libvirt NAT forwarding. False enables NAT. Does not establish physical air-gap proof or isolate the host itself. |
 | `http_port` | Local nginx port, `8080`. Serves boot assets and temporary Ignition. |
 | `cluster_cidr`, `host_prefix` | Pod network `10.128.0.0/14`, per-node prefix `23`. |
 | `service_cidr` | Service network `172.30.0.0/16`; must not overlap node/pod networks. |
@@ -111,7 +194,7 @@ Node MACs, names and IPs must be unique. The script refuses existing unmanaged V
 | `registry.container`, `.unit` | Podman container and systemd service names. |
 | `mirror_parallel_images`, `mirror_parallel_layers` | Default 2 and 3, limiting load on the single NVMe host. |
 | `mirror_retries`, `image_timeout` | Default 10 retries and `30m` per image. |
-| `virtualization.enabled` | Deploy virtualization. If false, also disable storage. |
+| `virtualization.enabled` | Legacy compatibility field; when `modules.selected` exists, module selection is authoritative. |
 | `virtualization.version`, `.channel` | Exact operator version `4.22.12`, channel `stable`. |
 | `virtualization.catalog`, `.package` | Source index and `kubevirt-hyperconverged`. |
 | `virtualization.namespace`, `.hco_name` | `openshift-cnv`, `kubevirt-hyperconverged`. |
@@ -123,7 +206,7 @@ The mirror is anonymous TLS on the lab bridge. The pull secret authenticates to 
 
 | Parameter | Default / meaning |
 |---|---|
-| `storage.enabled` | True; adds data disks, mounts, HPP and a StorageClass after virtualization. |
+| `storage.enabled` | Legacy compatibility field; selected `storage` module enables disks, mounts, HPP and a StorageClass. Requires `virtualization`. |
 | `storage.disk_gib` | 80 per node. Sparse raw files; validate physical capacity as they grow. |
 | `storage.target` | `vdb`; currently fixed by validation to prevent accidental OS disk selection. |
 | `storage.mount_path` | `/var/hpvolumes`; currently fixed by validation and mount-unit name. |
@@ -133,14 +216,14 @@ The mirror is anonymous TLS on the lab bridge. The pull secret authenticates to 
 | `storage.default` | True marks the class as default for general PVCs and virtualization. Refuses a different existing default class. |
 | `storage.adopt_existing_disks` | False for new deployments. True allows verified existing, mounted XFS data disks from our manual test; never permits formatting them. |
 | `storage.minimum_host_free_gib` | 100 GiB host reserve, in addition to the full nominal size of data disks not yet created. This does not reserve capacity at filesystem level. |
-| `storage.timeout_seconds` | 900 seconds for HPP rollout and smoke test. |
+| `storage.timeout_seconds` | 3600 seconds for each HPP rollout/verification/smoke wait; periodic pod/event diagnostics. |
 | `storage.smoke_test` | True creates `ocplab-storage-test/storage-check` PVC and pod using the installed HCO image. Leaves evidence in place. |
 
 HPP is node-local, not replicated or shared. Three 80 GiB disks are not a single resilient 240 GiB volume. Requested PVC sizes are not enforced quotas in this setup: our 1 GiB test PVC reported 79 GiB and exposed the full backing filesystem. Monitor actual free space. Do not rely on requested PVC capacities to prevent exhaustion. No automatic live migration or node-failure recovery is promised.
 
 ### Timeouts
 
-`timeouts.mirror_seconds=21600`, `vm_install_seconds=1800`, `bootstrap_seconds=7200`, `cluster_seconds=7200`, `operator_seconds=3600`. These are stage/subtask budgets, not guarantees of completion. The Ansible async task has a 12-hour outer ceiling; each phase starts a new task. Increase budgets in your initial config before mutation; arbitrary config changes are deliberately blocked once resources exist.
+`timeouts.mirror_seconds=21600`, `vm_install_seconds=1800`, `bootstrap_seconds=14400`, `cluster_seconds=14400`, `operator_seconds=3600`. These are stage/subtask budgets, not guarantees of completion. The Ansible async task has a 24-hour outer ceiling; each phase starts a new task. Increase budgets in your initial config before mutation; arbitrary config changes are deliberately blocked once resources exist.
 
 ## 3. Detailed operations guide
 
@@ -148,7 +231,7 @@ HPP is node-local, not replicated or shared. Three 80 GiB disks are not a single
 
 | Stage | Actions and checkpoint |
 |---|---|
-| `preflight` | Checks Debian 12, root, KVM, pull secret, names, CIDRs, nested virtualization, host RAM/free disk and owned VMs. Makes no cluster infrastructure changes. |
+| `preflight` | Detects supported Linux distribution, checks root, KVM, pull secret, names, CIDRs, nested virtualization, host RAM/free disk and owned VMs. Makes no cluster infrastructure changes. |
 | `prepare` | Installs dependencies; creates its own libvirt DNS/DHCP network; configures HAProxy, nginx, local NTP, SSH key, registry CA/TLS service; downloads and verifies tools. |
 | `mirror` | Mirrors exact release/operator selection with oc-mirror v2, persistent workspace/cache and retries; writes IDMS, ITMS, catalog and pinned configurations. |
 | `assets` | Downloads kernel, initramfs, rootfs and raw installation image from installer stream metadata, verifies SHA-256 and serves locally. Valid cached assets are reused. |
@@ -242,7 +325,7 @@ Expected: HPP desired/current/ready 3, CSI pods 4/4, recognized RWO Filesystem p
 
 ## 4. Tested fixes and remaining scope
 
-The original lab reached successful OpenShift/Virtualization validation and a successful HPP write test. This v2 archive integrates those manual fixes and automates the storage work. The revised Screen launcher, migrations and resumed disk lifecycle have offline tests; **the complete revised archive has not been deployed end-to-end on a new host**. See `docs/TEST_RESULTS.txt` for actual checks, and `docs/LESSONS_LEARNED.md` for incident context.
+The original lab reached successful OpenShift/Virtualization validation and a successful HPP write test. The v2 baseline integrated those manual fixes and automates the storage work. v3 extends hardware assessment, distribution adapters, module selection, waits and exposure. **The v3 multi-distribution installation has not been exercised end-to-end on physical hosts.** GitHub Actions runs offline tests and syntax checks; it does not certify a live deployment. See `docs/TEST_RESULTS.txt` for actual checks, and `docs/LESSONS_LEARNED.md` for incident context.
 
 The earlier QEMU double-free and unrelated guest-file corruption were not root-caused. Raw disks are a deliberate lab default, not a claim that a host/QEMU/hardware defect is fixed. Stop on fresh corruption evidence.
 

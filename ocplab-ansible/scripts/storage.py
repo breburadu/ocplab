@@ -7,7 +7,7 @@ import yaml
 DEFAULTS=dict(enabled=True,disk_gib=80,target='vdb',mount_path='/var/hpvolumes',
               pool_name='vm-storage',storage_class='hostpath-csi',reclaim_policy='Retain',
               default=True,adopt_existing_disks=False,minimum_host_free_gib=100,
-              timeout_seconds=900,smoke_test=True)
+              timeout_seconds=3600,smoke_test=True)
 
 def settings(lab):
     c={**DEFAULTS,**lab.c.get('storage',{})}
@@ -102,7 +102,7 @@ def provision(lab):
             assert not marker.exists(),'Owned disk missing; refusing recreation'
             write(marker,json.dumps({'path':str(disk),'size':size,'format_allowed':True}))
             run(['qemu-img','create','-f','raw',disk,str(c['disk_gib'])+'G'])
-            run(['chown','libvirt-qemu:kvm',disk]); os.chmod(disk,0o600)
+            run(['chown',__import__('host').profile()['qemu_owner'],disk]); os.chmod(disk,0o600)
         elif not marker.exists():
             assert c['adopt_existing_disks'],'Existing data disk: set storage.adopt_existing_disks=true after verifying its identity'
             assert disk.stat().st_size==size,'Unexpected data disk size'
@@ -116,10 +116,10 @@ def provision(lab):
         for mode,flags in [('config',['--inactive']),('live',[])]:
             if attachments(lab.vir('dumpxml',n['name'],*flags)).get('vdb') is None:
                 lab.vir('attach-device',n['name'],xml,'--'+mode)
-        deadline=time.time()+60
+        deadline=time.time()+300
         while lab.ssh(n,'test -b /dev/vdb',check=False).returncode:
             assert time.time()<deadline,'vdb did not appear'; time.sleep(3)
-        print(lab.ssh(n,'sudo bash -s',input=guest_script(size,identity['format_allowed']),timeout=300))
+        print(lab.ssh(n,'sudo bash -s',input=guest_script(size,identity['format_allowed']),timeout=c['timeout_seconds']))
         # After successful format/mount, later runs must never format this disk again.
         identity['format_allowed']=False; write(marker,json.dumps(identity))
     hpp={'apiVersion':'hostpathprovisioner.kubevirt.io/v1beta1','kind':'HostPathProvisioner','metadata':{'name':'hostpath-provisioner'},'spec':{'imagePullPolicy':'IfNotPresent','storagePools':[{'name':c['pool_name'],'path':c['mount_path']}],'workload':{'nodeSelector':{'node-role.kubernetes.io/worker':''}}}}
@@ -133,8 +133,11 @@ def provision(lab):
     if old: assert json.loads(old)['spec']['storagePools']==hpp['spec']['storagePools'],'Existing HPP pool differs; refusing overwrite'
     path=lab.w/'storage/hostpath.yaml'; write(path,yaml.safe_dump_all([hpp,sc],sort_keys=False))
     lab.ocmd('apply','--dry-run=server','-f',path); lab.ocmd('apply','-f',path)
-    lab.logrun([lab.oc,'--kubeconfig='+str(lab.ins/'auth/kubeconfig'),'-n',lab.c['virtualization']['namespace'],'rollout','status','daemonset/hostpath-provisioner-csi','--timeout='+str(c['timeout_seconds'])+'s'],'hostpath-rollout',c['timeout_seconds']+30)
-    verify(lab)
+    def ready():
+        ds=json.loads(lab.ocmd('-n',lab.c['virtualization']['namespace'],'get','daemonset','hostpath-provisioner-csi','-o','json'))['status']
+        return ds.get('desiredNumberScheduled')==len(lab.c['nodes']) and ds.get('numberReady')==len(lab.c['nodes'])
+    lab.wait_for('Hostpath CSI rollout',ready,c['timeout_seconds'],lab.c['virtualization']['namespace'])
+    lab.wait_for('storage validation',lambda:verify(lab) is None,c['timeout_seconds'],lab.c['virtualization']['namespace'])
     if c['smoke_test']: smoke(lab,c)
     lab.mark('storage')
 
@@ -158,14 +161,13 @@ def smoke(lab,c):
     pod={'apiVersion':'v1','kind':'Pod','metadata':{'name':'storage-check','namespace':ns},'spec':{'restartPolicy':'Never','containers':[{'name':'check','image':image,'command':['/bin/sh','-ec'],'args':['printf "ocplab-storage-ok\\n" > /data/check.txt; sync; cat /data/check.txt; df -h /data'],'securityContext':{'allowPrivilegeEscalation':False,'capabilities':{'drop':['ALL']},'seccompProfile':{'type':'RuntimeDefault'}},'volumeMounts':[{'name':'data','mountPath':'/data'}]}],'volumes':[{'name':'data','persistentVolumeClaim':{'claimName':'storage-check'}}]}}
     path=lab.w/'storage/smoke.yaml'; write(path,yaml.safe_dump_all([{'apiVersion':'v1','kind':'Namespace','metadata':{'name':ns}},pvc,pod]))
     lab.ocmd('apply','-f',path)
-    deadline=time.time()+c['timeout_seconds']
-    while time.time()<deadline:
+    def ready():
         phase=lab.ocmd('-n',ns,'get','pod','storage-check','-o','jsonpath={.status.phase}')
         print('Storage smoke pod: '+phase,flush=True)
-        assert phase!='Failed','Storage smoke pod failed; inspect logs/events'
-        if phase=='Succeeded':
-            output=lab.ocmd('-n',ns,'logs','storage-check'); print(output)
-            assert 'ocplab-storage-ok' in output
-            return
-        time.sleep(10)
-    raise RuntimeError('Storage smoke timeout; inspect PVC and pod in '+ns)
+        if phase=='Failed':
+            lab.progress(ns)
+            raise AssertionError('Storage smoke pod failed; inspect logs/events; resources retained')
+        return phase=='Succeeded'
+    lab.wait_for('storage smoke test',ready,c['timeout_seconds'],ns)
+    output=lab.ocmd('-n',ns,'logs','storage-check'); print(output)
+    assert 'ocplab-storage-ok' in output
