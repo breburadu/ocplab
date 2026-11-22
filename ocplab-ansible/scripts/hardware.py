@@ -15,7 +15,7 @@ def distro(path='/etc/os-release'):
 def recommend(ram_mib,cpus,free_gib,kvm=True):
     # Never pretend that fewer/smaller masters implement this UPI topology.
     reserve=4096; minimum=4*16384+reserve
-    fit=ram_mib>=minimum and free_gib>=660 and cpus>=8 and kvm
+    fit=ram_mib>=minimum and free_gib>=800 and cpus>=8 and kvm
     node_ram=16384 if ram_mib<102400 else 24576 if ram_mib<135168 else 32768
     return {'topology':'three compact control-plane/worker nodes + temporary bootstrap',
       'fits_without_memory_overcommit':ram_mib>=minimum,

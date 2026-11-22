@@ -129,3 +129,26 @@ def nginx_default(lab):
         backup=lab.w/'backups/nginx.conf'
         if not backup.exists(): write(backup,original)
         write(p,result,0o644)
+
+def hosts_text(original,records):
+    """Replace managed aliases without deleting unrelated aliases/comments."""
+    original=re.sub(r'\n# BEGIN OCPLAB AUTO.*?# END OCPLAB AUTO\n','\n',original,flags=re.S)
+    names={name for line in records for name in line.split()[1:]}
+    lines=[]
+    for line in original.splitlines():
+        body,sep,comment=line.partition('#')
+        fields=body.split()
+        if fields and any(name in names for name in fields[1:]):
+            aliases=[name for name in fields[1:] if name not in names]
+            line=(fields[0]+' '+ ' '.join(aliases) if aliases else '')+(' #'+comment if sep else '')
+        lines.append(line)
+    return '\n'.join(lines).rstrip()+'\n# BEGIN OCPLAB AUTO\n'+'\n'.join(records)+'\n# END OCPLAB AUTO\n'
+
+def hosts(lab):
+    from lab import write
+    p=Path('/etc/hosts')
+    backup=lab.w/'backups/hosts'
+    if not backup.exists(): write(backup,p.read_bytes())
+    records=[f'{lab.gw} api.{lab.domain} api-int.{lab.domain} {lab.c["registry"]["hostname"]}']
+    records += [f'{n["ip"]} {n["name"]} {n["name"]}.{lab.c["base_domain"]}' for n in lab.nodes]
+    write(p,hosts_text(p.read_text(),records),0o644)

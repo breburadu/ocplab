@@ -127,7 +127,7 @@ Traffic paths:
 - Additional pod workload: LAN IP:18080 → HAProxy → node:allocated NodePort → selected Service endpoints.
 - VM SSH example: LAN IP:2221 → HAProxy → node1:22.
 
-Pod CIDR (`cluster_cidr`), Service CIDR (`service_cidr`) and VM CIDR are distinct, nonoverlapping networks. **HAProxy publishes TCP endpoints; it does not route an entire pod subnet.** No direct route to Pod IPs or ClusterIPs is assumed. Ordinary web workloads should use OpenShift Routes; explicit Service proxies cover additional TCP protocols. UDP publication is not implemented.
+Pod CIDR (`cluster_cidr`), Service CIDR (`service_cidr`) and VM CIDR are distinct, nonoverlapping networks. **HAProxy publishes TCP endpoints; it does not route an entire pod subnet.** No direct route to Pod IPs or ClusterIPs is assumed. Ordinary web workloads should use OpenShift Routes; explicit Service proxies cover additional TCP protocols. UDP publication is not implemented. Cluster NetworkPolicies must permit traffic to the selected workload; creating a proxy does not override those policies.
 
 Machine-config port 22623 stays on the internal gateway. No general DNAT, forwarding-policy reset or global firewall flush is performed. A dedicated nftables table limits LAN listener sources; firewalld rules are added when active. Other site firewall policies still apply. Removing exposure entries does not remove pre-existing firewalld allowances; review those as part of decommissioning.
 
@@ -231,6 +231,9 @@ HPP is node-local, not replicated or shared. Three 80 GiB disks are not a single
 
 | Stage | Actions and checkpoint |
 |---|---|
+| `assess` | Read-only local hardware report, before installing Ansible or creating config. |
+| `modules` | Lists supported selections; optionally queries available catalog packages. |
+| `expose` | Publishes configured VM TCP ports and pod Services, validates HAProxy, maintains LAN DNS and listener ACLs. |
 | `preflight` | Detects supported Linux distribution, checks root, KVM, pull secret, names, CIDRs, nested virtualization, host RAM/free disk and owned VMs. Makes no cluster infrastructure changes. |
 | `prepare` | Installs dependencies; creates its own libvirt DNS/DHCP network; configures HAProxy, nginx, local NTP, SSH key, registry CA/TLS service; downloads and verifies tools. |
 | `mirror` | Mirrors exact release/operator selection with oc-mirror v2, persistent workspace/cache and retries; writes IDMS, ITMS, catalog and pinned configurations. |

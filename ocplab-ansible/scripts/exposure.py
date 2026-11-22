@@ -11,7 +11,9 @@ def settings(c):
         a=ipaddress.ip_address(ip); assert a.version==4 and not a.is_unspecified and not a.is_loopback
     assert len(set(result['lan_ips']))==len(result['lan_ips'])
     for cidr in result['allowed_cidrs']: assert ipaddress.ip_network(cidr).version==4
-    for ip in result['upstream_dns']: assert ipaddress.ip_address(ip).version==4
+    for ip in result['upstream_dns']:
+        a=ipaddress.ip_address(ip)
+        assert a.version==4 and not a.is_loopback and not a.is_unspecified and ip not in result['lan_ips'], 'Upstream DNS must not point back at a lab listener'
     assert result['upstream_dns'], 'Explicit upstream DNS is required to avoid resolver loops'
     assert c['network']['gateway'] not in result['upstream_dns']
     assert not result['lan_ips'] or result['allowed_cidrs'], 'Set exposure.allowed_cidrs for LAN access'
@@ -108,7 +110,7 @@ def setup(lab):
         run(['systemctl','reload','ocplab-access'])
     if x['dns_enabled'] and x['lan_ips']:
         answer=x['lan_ips'][0]
-        config='port=53\nbind-dynamic\nno-hosts\nno-resolv\ndomain-needed\nbogus-priv\nlog-facility=-\n'
+        config='port=53\nbind-dynamic\nno-hosts\nno-resolv\ndomain-needed\nbogus-priv\npid-file=/run/ocplab-lan-dns.pid\nlog-facility=-\n'
         config+=''.join('listen-address='+ip+'\n' for ip in x['lan_ips'])
         config+=''.join('server='+ip+'\n' for ip in x['upstream_dns'])
         config+='local=/'+lab.domain+'/\nhost-record=api.'+lab.domain+','+answer+'\naddress=/apps.'+lab.domain+'/'+answer+'\n'

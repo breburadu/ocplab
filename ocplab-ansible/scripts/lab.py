@@ -251,11 +251,7 @@ defaults
         run(['systemctl','daemon-reload'])
         run(['nginx','-t']); run(['systemctl','restart','nginx'])
         host.chrony(self)
-        hosts=Path('/etc/hosts').read_text()
-        hosts=re.sub(r'\n# BEGIN OCPLAB AUTO.*?# END OCPLAB AUTO\n','\n',hosts,flags=re.S)
-        records=[f'{self.gw} api.{self.domain} api-int.{self.domain} {self.c["registry"]["hostname"]}']
-        records += [f'{n["ip"]} {n["name"]} {n["name"]}.{self.c["base_domain"]}' for n in self.nodes]
-        write('/etc/hosts',hosts+'\n# BEGIN OCPLAB AUTO\n'+'\n'.join(records)+'\n# END OCPLAB AUTO\n',0o644)
+        host.hosts(self)
         host.resolver(self)
         exposure.setup(self)
         self.haproxy(not (self.state/'bootstrap-complete').exists())

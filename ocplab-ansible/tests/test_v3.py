@@ -2,11 +2,17 @@ import json, sys, tempfile, unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import hardware, modules, exposure, lab
+import hardware, modules, exposure, lab, host
 ROOT=Path(__file__).resolve().parents[1]
 class V3(unittest.TestCase):
     def config(self):
         return json.loads((ROOT/'config/lab.example.json').read_text())
+    def test_hosts_replaces_conflicts_preserving_other_aliases(self):
+        text='127.0.0.1 localhost\n192.168.122.1 api.lab.local old-alias # keep\n'
+        out=host.hosts_text(text,['192.168.123.1 api.lab.local'])
+        self.assertIn('192.168.122.1 old-alias # keep',out)
+        self.assertEqual(out.count('api.lab.local'),1)
+        self.assertEqual(host.hosts_text(out,['192.168.123.1 api.lab.local']),out)
     def test_distro_detection(self):
         with tempfile.TemporaryDirectory() as d:
             p=Path(d)/'os-release'
