@@ -6,6 +6,11 @@ Includes OpenShift Virtualization, dedicated Hostpath storage, Screen execution,
 
 See [continuation notes](ocplab-ansible/docs/CONTINUATION.md) for the last reported environment and pending LAN integration. Credentials and runtime cluster data are excluded.
 
-## Dialcube website
+## Related repositories
 
-[Dialcube website project](dialcube.ro/README.md) — PHP/MySQL site, configuration templates and project information.
+The following projects were migrated to standalone repositories:
+
+- [Dialcube](https://github.com/breburadu/dialcube.ro)
+- [Stepora](https://github.com/breburadu/stepora.ro)
+- [WireGuard Manager](https://github.com/breburadu/wireguard-manager)
+- [Healingfriends](https://github.com/breburadu/healingfriends)
