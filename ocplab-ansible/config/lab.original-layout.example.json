@@ -82,8 +82,8 @@
   "timeouts": {
     "mirror_seconds": 21600,
     "vm_install_seconds": 1800,
-    "bootstrap_seconds": 7200,
-    "cluster_seconds": 7200,
+    "bootstrap_seconds": 14400,
+    "cluster_seconds": 14400,
     "operator_seconds": 3600
   },
   "allow_memory_overcommit": true,
@@ -104,7 +104,31 @@
     "default": true,
     "adopt_existing_disks": false,
     "minimum_host_free_gib": 100,
-    "timeout_seconds": 900,
+    "timeout_seconds": 3600,
     "smoke_test": true
+  },
+  "modules": {
+    "selected": [
+      "core",
+      "virtualization",
+      "storage"
+    ],
+    "list_catalog_packages": false
+  },
+  "exposure": {
+    "lan_ips": [],
+    "allowed_cidrs": [],
+    "dns_enabled": true,
+    "upstream_dns": [
+      "1.1.1.1",
+      "1.0.0.1"
+    ],
+    "tcp_forwards": [],
+    "services": []
+  },
+  "waits": {
+    "poll_seconds": 30,
+    "diagnostic_seconds": 120,
+    "api_seconds": 900
   }
 }

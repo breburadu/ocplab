@@ -1,26 +1,36 @@
 ---
-- name: Install compact OpenShift lab on the Debian KVM bastion
+- name: Install compact OpenShift lab on a Linux KVM bastion
   hosts: bastion
   become: true
-  gather_facts: false
+  gather_facts: true
   vars:
     config_file: "{{ playbook_dir }}/../config/lab.json"
     phase: preflight
+    common_packages: [nginx, haproxy, podman, chrony, openssl, ca-certificates, curl, python3, sysstat, smartmontools, screen, nftables]
+    distro_packages:
+      Debian: [qemu-system-x86, qemu-utils, libvirt-daemon-system, libvirt-clients, virtinst, dnsmasq-base, python3-yaml, openssh-client, libguestfs-tools]
+      RedHat: [qemu-kvm, qemu-img, libvirt, libvirt-client, virt-install, dnsmasq, python3-pyyaml, openssh-clients, guestfs-tools, policycoreutils-python-utils]
   tasks:
-    - name: Validate selected phase
+    - name: Validate selected phase and distribution
       ansible.builtin.assert:
         that:
-          - phase in ['preflight','prepare','mirror','assets','ignition','vms','complete','virtualization','storage','validate','diagnostics']
-    - name: Require explicit host-service management consent before preparation
+          - phase in ['preflight','prepare','mirror','assets','ignition','vms','complete','virtualization','storage','expose','modules','validate','diagnostics']
+          - ansible_facts.os_family in ['Debian', 'RedHat']
+          - ansible_facts.architecture == 'x86_64'
+    - name: Require host-service management before preparation
       ansible.builtin.assert:
         that: (lookup('file', config_file) | from_json).manage_host_services | bool
-        fail_msg: "Read README, then set manage_host_services=true in your configuration."
+        fail_msg: "Set manage_host_services=true on the intended lab host."
       when: phase == 'prepare'
-    - name: Install Debian dependencies during connected preparation
+    - name: Refresh APT metadata
       ansible.builtin.apt:
-        name: [qemu-system-x86, qemu-utils, libvirt-daemon-system, libvirt-clients, virtinst, nginx, haproxy, podman, dnsmasq-base, chrony, openssl, ca-certificates, curl, python3-yaml, python3, openssh-client, sysstat, smartmontools, libguestfs-tools, screen]
-        state: present
         update_cache: true
+        cache_valid_time: 3600
+      when: phase == 'prepare' and ansible_facts.os_family == 'Debian'
+    - name: Install distribution-specific KVM, HAProxy, DNS and storage dependencies
+      ansible.builtin.package:
+        name: "{{ common_packages + distro_packages[ansible_facts.os_family] }}"
+        state: present
       when: phase == 'prepare'
     - name: "Run {{ phase }} — live details in Screen logs window"
       ansible.builtin.command:
@@ -31,10 +41,10 @@
           - --config
           - "{{ config_file }}"
           - "{{ phase }}"
-      async: 43200
+      async: 86400
       poll: 15
       register: stage
-      changed_when: phase not in ['preflight', 'validate', 'diagnostics']
+      changed_when: phase not in ['preflight', 'modules', 'validate', 'diagnostics']
       no_log: false
     - name: Report stage result
       ansible.builtin.debug:

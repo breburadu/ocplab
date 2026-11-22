@@ -1,3 +1,15 @@
+# v3.0.0
+
+- Read-only hardware sizing script and initial run.sh menu.
+- Distribution detection and APT/DNF, libvirt, CA, Chrony, QEMU and SELinux adapters.
+- Explicit supported-module selection and optional catalog discovery.
+- NAT by default for new configs; existing network settings preserved.
+- LAN HAProxy/DNS, source ACLs, selected VM TCP forwarding and pod Service publication via NodePort.
+- Longer completion/storage budgets, retryable API readiness and periodic diagnostics.
+- Locked migration of operational settings; no cluster identity changes.
+- GitHub Actions offline tests and syntax checks. No claim of physical multi-distribution testing.
+
+
 # v2.0 — test-install fixes and storage automation
 
 - Handle regular, symlink and hardlink binary entries in client archives.
