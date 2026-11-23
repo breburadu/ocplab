@@ -2,8 +2,7 @@
 
 ## 1. Start the installation
 
-Run these commands **on the dedicated x86_64 Linux KVM host as root** (Debian, Ubuntu, RHEL or Fedora). This project contains code and example configuration, not your pull secret, private key, or an installed cluster. It deploys classic UPI: temporary bootstrap plus three schedulable control-plane nodes, a local image mirror, OpenShift Virtualization, and dedicated Hostpath storage.
-
+Run these commands **on the dedicated x86_64 Linux KVM host as root** (Debian, Ubuntu, RHEL or Fedora). 
 ### New installation
 
 ```bash
